@@ -10,7 +10,7 @@
 module Polygon2d exposing
     ( Polygon2d
     , singleLoop, with, convexHull
-    , outerLoop, innerLoops, vertices, edges, perimeter, area, boundingBox
+    , outerLoop, innerLoops, vertices, edges, perimeter, area, boundingBox, centroid
     , scaleAbout, rotateAround, translateBy, translateIn, mirrorAcross
     , relativeTo, placeIn
     , triangulate
@@ -35,7 +35,7 @@ holes. This module contains a variety of polygon-related functionality, such as
 
 # Properties
 
-@docs outerLoop, innerLoops, vertices, edges, perimeter, area, boundingBox
+@docs outerLoop, innerLoops, vertices, edges, perimeter, area, boundingBox, centroid
 
 
 # Transformations
@@ -570,3 +570,104 @@ can render using WebGL:
 triangulate : Polygon2d -> TriangularMesh Point2d
 triangulate polygon =
     Monotone.triangulation polygon
+
+
+{-| Calculate centroid of the Polygon2d
+-}
+centroid : Polygon2d -> Maybe Point2d
+centroid polygon =
+    let
+        ol =
+            outerLoop polygon
+
+        il =
+            innerLoops polygon
+    in
+    case il of
+        [] ->
+            holelessCentroid ol
+
+        _ ->
+            -- not handling inner loops in this iteration
+            Nothing
+
+
+holelessCentroid : List Point2d -> Maybe Point2d
+holelessCentroid points =
+    case points of
+        [] ->
+            Nothing
+
+        p1 :: [] ->
+            Just p1
+
+        p1 :: p2 :: [] ->
+            BoundingBox2d.from p1 p2
+                |> BoundingBox2d.centerPoint
+                |> Just
+
+        p1 :: p2 :: p3 :: [] ->
+            -- triangles are a base case for polygon centroids, as
+            -- their centroids are simple averages of the vertices
+            Point2d.centroid points
+
+        _ ->
+            let
+                box =
+                    BoundingBox2d.containingPoints points
+            in
+            case box of
+                Nothing ->
+                    Nothing
+
+                Just b ->
+                    let
+                        roughCenter =
+                            BoundingBox2d.centerPoint b
+
+                        pointsAroundRoughCenter =
+                            List.map
+                                (Vector2d.from roughCenter Point2d.origin |> Point2d.translateBy)
+                                points
+
+                        totalArea =
+                            singleLoop pointsAroundRoughCenter |> area
+
+                        es =
+                            loopEdges pointsAroundRoughCenter
+
+                        triangles =
+                            List.map (triangleFrom roughCenter) es
+
+                        correction =
+                            triangles
+                                |> List.foldl
+                                    (centerAndAreaOf >> scaleByRelativeArea totalArea >> Vector2d.sum)
+                                    Vector2d.zero
+                    in
+                    Just (Point2d.translateBy correction roughCenter)
+
+
+triangleFrom : Point2d -> LineSegment2d -> Polygon2d
+triangleFrom point line =
+    let
+        ( p1, p2 ) =
+            LineSegment2d.endpoints line
+    in
+    singleLoop [ point, p1, p2 ]
+
+
+centerAndAreaOf : Polygon2d -> ( Maybe Point2d, Float )
+centerAndAreaOf polygon =
+    ( centroid polygon, area polygon )
+
+
+scaleByRelativeArea : Float -> ( Maybe Point2d, Float ) -> Vector2d
+scaleByRelativeArea totalArea ( maybePoint, partialArea ) =
+    case maybePoint of
+        Nothing ->
+            Vector2d.zero
+
+        Just point ->
+            Vector2d.from Point2d.origin point
+                |> Vector2d.scaleBy (partialArea / totalArea)
